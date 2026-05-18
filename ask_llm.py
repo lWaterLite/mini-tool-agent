@@ -26,6 +26,7 @@ import argparse
 import logging
 import os
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -34,7 +35,6 @@ try:
     from openai import OpenAI
 except ImportError:  # pragma: no cover - 这里用于提供更友好的运行时提示。
     OpenAI = None  # type: ignore[assignment]
-
 
 DEFAULT_SYSTEM_PROMPT = (
     "你是一个严谨、耐心的技术助教。"
@@ -162,16 +162,14 @@ def build_config(args: argparse.Namespace) -> LLMConfig:
     )
 
 
-def build_messages(user_text: str, system_prompt: str) -> list[dict[str, str]]:
+def build_messages(system_prompt: str) -> list[dict[str, str]]:
     """构造发送给模型的 messages 列表。
 
     子模块 1 中，我们只需要 system + user 两类消息。
     后续进入 agent loop 后，还会加入 assistant 消息和 tool 结果消息。
     """
-
     return [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_text},
+        {"role": "system", "content": system_prompt}
     ]
 
 
@@ -273,6 +271,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="打印调试日志。程序不会记录 API key。",
     )
+    parser.add_argument(
+        "--save",
+        type=str,
+        help="将模型回答存储为输入字符名称的Markdown文件，只保存最终对话回答。"
+    )
+    parser.add_argument(
+        "--chat",
+        action="store_true",
+        help="进入交互式对话。")
     return parser.parse_args(argv)
 
 
@@ -301,23 +308,49 @@ def main(argv: list[str] | None = None) -> int:
     try:
         load_dotenv(Path(args.env_file))
         config = build_config(args)
-        question = get_question(args)
-
-        if not question:
-            raise ConfigError("问题不能为空。")
-
-        messages = build_messages(question, args.system_prompt)
-
         LOGGER.debug("使用模型=%s，是否流式输出=%s", config.model, config.stream)
-        LOGGER.debug("messages 数量=%d", len(messages))
-
+        LOGGER.debug(f"是否启用交互式对话: {args.chat}")
+        cost_time: float = 0.0
+        answer = None
         client = create_client(config)
+        question = get_question(args).strip()
+        messages = build_messages(args.system_prompt)
+        if args.chat:
+            while question.strip().lower() != "exit":
+                if not question:
+                    raise ConfigError("问题不能为空。")
 
-        if config.stream:
-            ask_stream(client, config, messages)
+                messages.append({"role": "user", "content": question})
+
+                LOGGER.debug("messages 数量=%d", len(messages))
+
+                start = time.perf_counter()
+                if config.stream:
+                    answer = ask_stream(client, config, messages)
+                else:
+                    answer = ask_once(client, config, messages)
+                    print(answer)
+                end = time.perf_counter()
+
+                cost_time += end - start
+
+                messages.append({"role": "assistant", "content": answer})
+
+                question = input("请继续输入对话: ")
         else:
-            answer = ask_once(client, config, messages)
-            print(answer)
+            start = time.perf_counter()
+            if config.stream:
+                answer = ask_stream(client, config, messages)
+            else:
+                answer = ask_once(client, config, messages)
+                print(answer)
+            end = time.perf_counter()
+            cost_time += end - start
+
+        if args.save and answer is not None:
+            Path(args.save).write_text(answer, encoding="utf-8")
+
+        print(f"请求耗时{cost_time: .2f}秒")
 
         return 0
 
