@@ -1,23 +1,23 @@
 """
-Submodule 1 exercise: call an LLM from the command line.
+子模块 1 练习：从命令行调用一次 LLM。
 
-What this example covers:
-1. Read user input from the command line.
-2. Read the API key and model settings from environment variables or .env.
-3. Build system + user messages.
-4. Call an OpenAI-compatible chat API.
-5. Let the caller adjust temperature and max tokens.
-6. Optionally print the answer as a stream.
+这个示例覆盖：
+1. 从命令行读取用户输入。
+2. 从环境变量或 .env 文件读取 API key 和模型配置。
+3. 构造 system + user messages。
+4. 调用 OpenAI 兼容的聊天 API。
+5. 允许调用者调整 temperature 和 max tokens。
+6. 可选使用流式输出打印回答。
 
-Run examples:
+运行示例：
     python ask_llm.py "什么是 agent loop？"
     python ask_llm.py --temperature 0.0 "用三句话解释 temperature"
     python ask_llm.py --stream "请像技术助教一样解释 streaming"
 
-Before running:
-    1. Install the SDK: pip install openai
-    2. Copy .env.example to .env
-    3. Fill in LLM_API_KEY and LLM_MODEL
+运行前准备：
+    1. 安装 SDK：pip install openai
+    2. 复制 .env.example 为 .env
+    3. 填写 LLM_API_KEY 和 LLM_MODEL
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from typing import Any
 
 try:
     from openai import OpenAI
-except ImportError:  # pragma: no cover - this is a friendly runtime message.
+except ImportError:  # pragma: no cover - 这里用于提供更友好的运行时提示。
     OpenAI = None  # type: ignore[assignment]
 
 
@@ -45,15 +45,15 @@ LOGGER = logging.getLogger("ask_llm")
 
 
 class ConfigError(RuntimeError):
-    """Raised when required runtime configuration is missing or invalid."""
+    """当必要运行配置缺失或不合法时抛出。"""
 
 
 @dataclass(frozen=True)
 class LLMConfig:
-    """Runtime settings for a single LLM request.
+    """一次 LLM 请求所需的运行配置。
 
-    Keeping configuration in one object makes the code easier to test and extend.
-    Later, this idea can grow into app/core/config.py in the full agent project.
+    把配置集中放在一个对象里，可以让代码更容易测试和扩展。
+    后续完整 agent 项目中，这个思路可以演进为 app/core/config.py。
     """
 
     api_key: str
@@ -65,11 +65,11 @@ class LLMConfig:
 
 
 def load_dotenv(dotenv_path: Path) -> None:
-    """Load simple KEY=VALUE pairs from a .env file.
+    """从 .env 文件中读取简单的 KEY=VALUE 配置。
 
-    This tiny loader avoids adding python-dotenv for the first exercise. It only
-    handles the common case and intentionally does not override real environment
-    variables, because shell-provided values should win over local defaults.
+    第一个练习先不引入 python-dotenv，所以这里写一个很小的读取器。
+    它只处理最常见的情况，并且不会覆盖已经存在的环境变量：
+    命令行或系统环境中显式提供的值，应该优先于本地 .env 默认值。
     """
 
     if not dotenv_path.exists():
@@ -78,12 +78,12 @@ def load_dotenv(dotenv_path: Path) -> None:
     for raw_line in dotenv_path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
 
-        # Empty lines and comments keep .env files readable.
+        # 空行和注释可以让 .env 文件更容易阅读。
         if not line or line.startswith("#"):
             continue
 
         if "=" not in line:
-            LOGGER.warning("Skip invalid .env line: %s", raw_line)
+            LOGGER.warning("跳过不合法的 .env 行：%s", raw_line)
             continue
 
         key, value = line.split("=", 1)
@@ -95,7 +95,7 @@ def load_dotenv(dotenv_path: Path) -> None:
 
 
 def read_float_env(name: str, default: float) -> float:
-    """Read a float environment variable with a clear error message."""
+    """读取浮点数环境变量，并在格式错误时给出清晰提示。"""
 
     value = os.getenv(name)
     if value is None or value == "":
@@ -104,11 +104,11 @@ def read_float_env(name: str, default: float) -> float:
     try:
         return float(value)
     except ValueError as exc:
-        raise ConfigError(f"{name} must be a number, got: {value!r}") from exc
+        raise ConfigError(f"{name} 必须是数字，当前值为：{value!r}") from exc
 
 
 def read_int_env(name: str, default: int) -> int:
-    """Read an integer environment variable with a clear error message."""
+    """读取整数环境变量，并在格式错误时给出清晰提示。"""
 
     value = os.getenv(name)
     if value is None or value == "":
@@ -117,21 +117,21 @@ def read_int_env(name: str, default: int) -> int:
     try:
         return int(value)
     except ValueError as exc:
-        raise ConfigError(f"{name} must be an integer, got: {value!r}") from exc
+        raise ConfigError(f"{name} 必须是整数，当前值为：{value!r}") from exc
 
 
 def build_config(args: argparse.Namespace) -> LLMConfig:
-    """Merge CLI arguments and environment variables into one config object."""
+    """把命令行参数和环境变量合并成一个配置对象。"""
 
     api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise ConfigError(
-            "Missing API key. Set LLM_API_KEY in .env or in your shell environment."
+            "缺少 API key。请在 .env 或系统环境变量中设置 LLM_API_KEY。"
         )
 
     model = args.model or os.getenv("LLM_MODEL") or os.getenv("OPENAI_MODEL")
     if not model:
-        raise ConfigError("Missing model. Set LLM_MODEL in .env or pass --model.")
+        raise ConfigError("缺少模型名称。请在 .env 中设置 LLM_MODEL，或传入 --model。")
 
     temperature = (
         args.temperature
@@ -145,10 +145,10 @@ def build_config(args: argparse.Namespace) -> LLMConfig:
     )
 
     if not 0 <= temperature <= 2:
-        raise ConfigError("temperature must be between 0 and 2.")
+        raise ConfigError("temperature 必须在 0 到 2 之间。")
 
     if max_tokens <= 0:
-        raise ConfigError("max_tokens must be greater than 0.")
+        raise ConfigError("max_tokens 必须大于 0。")
 
     base_url = args.base_url or os.getenv("LLM_BASE_URL") or None
 
@@ -163,10 +163,10 @@ def build_config(args: argparse.Namespace) -> LLMConfig:
 
 
 def build_messages(user_text: str, system_prompt: str) -> list[dict[str, str]]:
-    """Build the messages list sent to the model.
+    """构造发送给模型的 messages 列表。
 
-    In submodule 1, we only need system + user messages. Later, an agent loop
-    will also add assistant messages and tool result messages.
+    子模块 1 中，我们只需要 system + user 两类消息。
+    后续进入 agent loop 后，还会加入 assistant 消息和 tool 结果消息。
     """
 
     return [
@@ -176,15 +176,14 @@ def build_messages(user_text: str, system_prompt: str) -> list[dict[str, str]]:
 
 
 def create_client(config: LLMConfig) -> Any:
-    """Create the LLM client.
+    """创建 LLM 客户端。
 
-    The OpenAI SDK can also talk to many OpenAI-compatible providers when
-    base_url is configured. This keeps the exercise flexible without changing
-    the rest of the code.
+    OpenAI SDK 在配置 base_url 后，也可以调用很多 OpenAI 兼容供应商。
+    这样后续切换模型服务时，不需要改动其他调用代码。
     """
 
     if OpenAI is None:
-        raise ConfigError("The openai package is not installed. Run: pip install openai")
+        raise ConfigError("未安装 openai 包。请先运行：pip install openai")
 
     if config.base_url:
         return OpenAI(api_key=config.api_key, base_url=config.base_url)
@@ -193,7 +192,7 @@ def create_client(config: LLMConfig) -> Any:
 
 
 def ask_once(client: Any, config: LLMConfig, messages: list[dict[str, str]]) -> str:
-    """Send one non-streaming chat request and return the assistant text."""
+    """发送一次非流式聊天请求，并返回 assistant 文本。"""
 
     response = client.chat.completions.create(
         model=config.model,
@@ -204,13 +203,13 @@ def ask_once(client: Any, config: LLMConfig, messages: list[dict[str, str]]) -> 
 
     content = response.choices[0].message.content
     if not content:
-        raise RuntimeError("The model returned an empty response.")
+        raise RuntimeError("模型返回了空响应。")
 
     return content
 
 
 def ask_stream(client: Any, config: LLMConfig, messages: list[dict[str, str]]) -> str:
-    """Send one streaming chat request and print chunks as they arrive."""
+    """发送一次流式聊天请求，并在内容到达时逐段打印。"""
 
     chunks: list[str] = []
     stream = client.chat.completions.create(
@@ -234,51 +233,51 @@ def ask_stream(client: Any, config: LLMConfig, messages: list[dict[str, str]]) -
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    """Parse CLI arguments.
+    """解析命令行参数。
 
-    The question is positional but optional, so you can either pass it directly
-    or type it after the program starts.
+    question 是可选的位置参数。
+    你既可以启动时直接传入问题，也可以启动后在交互提示中输入。
     """
 
-    parser = argparse.ArgumentParser(description="Ask one question to an LLM.")
-    parser.add_argument("question", nargs="*", help="Question to send to the model.")
-    parser.add_argument("--model", help="Override LLM_MODEL for this run.")
-    parser.add_argument("--base-url", help="Override LLM_BASE_URL for this run.")
+    parser = argparse.ArgumentParser(description="向 LLM 提出一个问题。")
+    parser.add_argument("question", nargs="*", help="要发送给模型的问题。")
+    parser.add_argument("--model", help="仅在本次运行中覆盖 LLM_MODEL。")
+    parser.add_argument("--base-url", help="仅在本次运行中覆盖 LLM_BASE_URL。")
     parser.add_argument(
         "--temperature",
         type=float,
-        help="Sampling temperature. Lower is more stable, higher is more creative.",
+        help="采样温度。越低越稳定，越高越有创造性。",
     )
     parser.add_argument(
         "--max-tokens",
         type=int,
-        help="Maximum number of output tokens.",
+        help="最大输出 token 数。",
     )
     parser.add_argument(
         "--stream",
         action="store_true",
-        help="Print the answer token by token as the model generates it.",
+        help="模型生成时逐段打印回答。",
     )
     parser.add_argument(
         "--system-prompt",
         default=DEFAULT_SYSTEM_PROMPT,
-        help="Override the default technical-teacher system prompt.",
+        help="覆盖默认的技术助教 system prompt。",
     )
     parser.add_argument(
         "--env-file",
         default=".env",
-        help="Path to the env file. Defaults to .env in the current directory.",
+        help="环境变量文件路径。默认读取当前目录下的 .env。",
     )
     parser.add_argument(
         "--debug",
         action="store_true",
-        help="Print debug logs. The API key is never logged.",
+        help="打印调试日志。程序不会记录 API key。",
     )
     return parser.parse_args(argv)
 
 
 def get_question(args: argparse.Namespace) -> str:
-    """Get the user question from CLI args or interactive input."""
+    """从命令行参数或交互输入中获取用户问题。"""
 
     if args.question:
         return " ".join(args.question).strip()
@@ -287,10 +286,10 @@ def get_question(args: argparse.Namespace) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Program entry point.
+    """程序入口。
 
-    Returning an exit code instead of calling sys.exit everywhere makes the
-    function easier to test later with pytest.
+    这里返回退出码，而不是在各处直接调用 sys.exit，
+    这样后续用 pytest 测试 main 函数会更方便。
     """
 
     args = parse_args(argv or sys.argv[1:])
@@ -305,12 +304,12 @@ def main(argv: list[str] | None = None) -> int:
         question = get_question(args)
 
         if not question:
-            raise ConfigError("Question cannot be empty.")
+            raise ConfigError("问题不能为空。")
 
         messages = build_messages(question, args.system_prompt)
 
-        LOGGER.debug("Using model=%s stream=%s", config.model, config.stream)
-        LOGGER.debug("Messages count=%d", len(messages))
+        LOGGER.debug("使用模型=%s，是否流式输出=%s", config.model, config.stream)
+        LOGGER.debug("messages 数量=%d", len(messages))
 
         client = create_client(config)
 
@@ -323,23 +322,23 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     except KeyboardInterrupt:
-        print("\nInterrupted by user.", file=sys.stderr)
+        print("\n用户中断了程序。", file=sys.stderr)
         return 130
     except ConfigError as exc:
-        print(f"Configuration error: {exc}", file=sys.stderr)
+        print(f"配置错误：{exc}", file=sys.stderr)
         return 2
-    except Exception as exc:  # The first exercise keeps runtime errors readable.
-        print(f"Request failed: {exc}", file=sys.stderr)
+    except Exception as exc:  # 第一个练习先让运行时错误保持易读。
+        print(f"请求失败：{exc}", file=sys.stderr)
         return 1
 
 
-# Practice tasks for you:
-# 1. Add a --save option that writes the final answer to a Markdown file.
-# 2. Add a --repeat N option to ask the same question multiple times and compare
-#    how temperature changes answer stability.
-# 3. Add a simple conversation mode that keeps previous assistant replies in
-#    messages until the user types "exit".
-# 4. Log request latency without logging the API key or the full user message.
+# 留给你的练习任务：
+# 1. 增加一个 --save 选项，把最终回答写入 Markdown 文件。
+# 2. 增加一个 --repeat N 选项，多次询问同一个问题，并比较
+#    temperature 如何影响回答稳定性。
+# 3. 增加一个简单对话模式：在用户输入 "exit" 前，把之前的 assistant
+#    回复持续保留在 messages 中。
+# 4. 记录请求耗时，但不要记录 API key 或完整用户消息。
 
 
 if __name__ == "__main__":
