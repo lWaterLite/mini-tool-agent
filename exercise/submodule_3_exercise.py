@@ -87,7 +87,7 @@ class CalculatorArgs(BaseModel):
     # 1. 给 expression 增加最小长度约束。
     # 2. 思考是否应该限制最大长度，为什么？
     # 3. 思考为什么 expression 不能直接交给 eval。
-    expression: str = Field(description="要计算的数学表达式，例如 19 * 23 + 7")
+    expression: str = Field(description="要计算的数学表达式，例如 19 * 23 + 7", min_length=1)
 
 
 class FileSearchArgs(BaseModel):
@@ -98,9 +98,9 @@ class FileSearchArgs(BaseModel):
     # 1. 给 query 增加最小长度约束。
     # 2. 给 max_results 增加范围约束，例如 1 到 20。
     # 3. 思考 directory 为什么需要路径安全校验。
-    query: str = Field(description="要搜索的关键词")
+    query: str = Field(description="要搜索的关键词", min_length=1)
     directory: str = Field(description="要搜索的目录，必须位于项目根目录内")
-    max_results: int = Field(default=5, description="最多返回多少条匹配结果")
+    max_results: int = Field(default=5, description="最多返回多少条匹配结果", ge=1, le=20)
 
 
 class WebSummaryArgs(BaseModel):
@@ -111,7 +111,13 @@ class WebSummaryArgs(BaseModel):
     # 1. 给 url 增加最小长度约束。
     # 2. 增加一个简单校验：url 必须以 http:// 或 https:// 开头。
     # 3. 思考真实网页工具为什么不应该在本阶段实现。
-    url: str = Field(description="要摘要的网页 URL")
+    url: str = Field(description="要摘要的网页 URL", min_length=1)
+
+    @model_validator(mode="after")
+    def validate_url_head(self) -> WebSummaryArgs:
+        if not self.url.startswith(("http://", "https://")):
+            raise ValueError("WebSummaryArgs.url 必须以 'http://'或'https://' 开头")
+        return self
 
 
 class TodoArgs(BaseModel):
@@ -132,6 +138,19 @@ class TodoArgs(BaseModel):
     #   def validate_by_action(self) -> "TodoArgs":
     #       ...
     #       return self
+
+    @model_validator(mode="after")
+    def validate_by_action(self) -> TodoArgs:
+        if self.action == "add":
+            if not self.title:
+                raise ValueError("当action为add时，TodoArgs.title不能为None")
+        elif self.action == "complete":
+            if not self.task_id:
+                raise ValueError("当action为complete时，TodoArgs.task_id不能为None")
+        elif self.action == "list":
+            if self.title or self.task_id:
+                raise ValueError("当action为list时，不需要 TodoArgs.title 或 TodoArgs.task_id")
+        return self
 
 
 # =============================================================================
@@ -186,7 +205,9 @@ class ToolRegistry:
         2. 注册成功后存入 self._tools。
         """
 
-        raise NotImplementedError("TODO 7：请实现 ToolRegistry.register。")
+        if spec.name in self._tools:
+            raise ValueError(f"ToolSpec.{spec.name} already exist")
+        self._tools[spec.name] = spec
 
     def list_tools(self) -> list[dict[str, Any]]:
         """列出当前可用工具 schema。"""
@@ -214,7 +235,23 @@ class ToolRegistry:
         - 为什么不能让模型直接传一个 Python 函数名来执行？
         """
 
-        raise NotImplementedError("TODO 8：请实现 ToolRegistry.run。")
+        if name not in self._tools:
+            return ToolResult(ok=False, content=f"ToolSpec.{name} not found", data=None, error=f"Tool.{name} not found")
+        spec = self._tools[name]
+        try:
+            args = spec.args_model.model_validate(raw_args)
+        except ValidationError as e:
+            return ToolResult(ok=False, content=f"Tool.{name} args are invalid", data=None,
+                              error=f"ToolSpec.{name} args are invalid: {str(e)}")
+
+        try:
+            return spec.handler(args)
+        except Exception as e:
+            return ToolResult(
+                ok=False,
+                content=f"工具 {name} 执行失败。",
+                error=str(e),
+            )
 
 
 # =============================================================================
@@ -260,7 +297,35 @@ def safe_eval_math_expression(expression: str) -> float:
     3. 对不认识的节点 raise ValueError。
     """
 
-    raise NotImplementedError("TODO 9：请实现 safe_eval_math_expression。")
+    def eval_node(node: ast.AST) -> float:
+        if isinstance(node, ast.Constant):
+            if isinstance(node.value, (int, float)):
+                return float(node.value)
+            raise ValueError("表达式只允许数字常量")
+
+        if isinstance(node, ast.Expression):
+            return eval_node(node.body)
+
+        if isinstance(node, ast.BinOp):
+            op_type = type(node.op)
+            if op_type not in ALLOWED_BIN_OPS:
+                raise ValueError(f"非法的二元运算: {op_type.__name__}")
+            left = eval_node(node.left)
+            right = eval_node(node.right)
+            if op_type == ast.Div and right == 0:
+                raise ValueError("除数不能为0")
+            return ALLOWED_BIN_OPS[op_type](left, right)
+
+        if isinstance(node, ast.UnaryOp):
+            op_type = type(node.op)
+            if op_type not in ALLOWED_UNARY_OPS:
+                raise ValueError(f"非法的一元运算: {op_type.__name__}")
+            value = eval_node(node.operand)
+            return ALLOWED_UNARY_OPS[op_type](value)
+        raise ValueError(f"表达式含有非法节点: {node.__class__.__name__}")
+
+    tree = ast.parse(expression, mode="eval")
+    return eval_node(tree)
 
 
 def run_calculator(args: BaseModel) -> ToolResult:
@@ -270,11 +335,11 @@ def run_calculator(args: BaseModel) -> ToolResult:
 
     try:
         value = safe_eval_math_expression(calculator_args.expression)
-    except Exception as exc:
+    except Exception as e:
         return ToolResult(
             ok=False,
             content="计算器工具执行失败。",
-            error=str(exc),
+            error=str(e),
         )
 
     return ToolResult(
@@ -302,7 +367,13 @@ def ensure_inside_root(root: Path, target: Path) -> Path:
     Python 3.9+ 可以使用 target.is_relative_to(root)。
     """
 
-    raise NotImplementedError("TODO 10：请实现 ensure_inside_root。")
+    root = root.resolve()
+    target = target.resolve()
+
+    if not target.is_relative_to(root):
+        raise ValueError(f"{target}不在允许安全访问的{root}路径内")
+
+    return target
 
 
 def iter_text_files(directory: Path) -> list[Path]:
@@ -315,7 +386,10 @@ def iter_text_files(directory: Path) -> list[Path]:
     3. 忽略目录和其他文件类型。
     """
 
-    raise NotImplementedError("TODO 11：请实现 iter_text_files。")
+    return [
+        p for p in directory.rglob('*')
+        if p.is_file() and p.suffix.lower() in ('.md', '.txt')
+    ]
 
 
 def run_file_search(args: BaseModel) -> ToolResult:
@@ -336,7 +410,49 @@ def run_file_search(args: BaseModel) -> ToolResult:
     - 文件读取失败时应该跳过，还是返回错误？
     """
 
-    raise NotImplementedError("TODO 12：请实现 run_file_search。")
+    def content_str_generator(a_records: dict[str, list[dict[str, Any]]]) -> str:
+        lines = []
+        for file_name, matches in a_records.items():
+            lines.append(f"{file_name}: ")
+            for match in matches:
+                lines.append(f"行号: {match['number']}, 内容: {match['line']}")
+        return "\n".join(lines)
+
+    validated_args = FileSearchArgs.model_validate(args)
+
+    try:
+        root = Path(__file__).resolve().parents[1]
+        target = ensure_inside_root(root, root / Path(validated_args.directory))
+        files = iter_text_files(target)
+        current_results_count = 0
+        records: dict = {}
+        for file in files:
+            relative_file = file.relative_to(root).as_posix()
+            with open(file, "r", encoding="utf-8") as f:
+                for number, line in enumerate(f, start=1):
+                    if validated_args.query in line:
+                        if relative_file not in records:
+                            records[relative_file] = []
+                        records[relative_file].append({
+                            "number": number,
+                            "line": line,
+                        })
+                        current_results_count += 1
+                        if current_results_count == validated_args.max_results:
+                            break
+
+            if current_results_count == validated_args.max_results:
+                break
+        if not records:
+            return ToolResult(ok=True, content="没有找到任何记录")
+
+        return ToolResult(
+            ok=True,
+            content="找到了以下记录:\n" + content_str_generator(records),
+            data=records,
+        )
+    except Exception as e:
+        return ToolResult(ok=False, content="调用文件检索工具时发生错误。", error=e.__str__())
 
 
 # =============================================================================
@@ -370,7 +486,22 @@ def run_web_summary_mock(args: BaseModel) -> ToolResult:
     - mock 工具如何帮助你写稳定测试？
     """
 
-    raise NotImplementedError("TODO 13：请实现 run_web_summary_mock。")
+    validated_args = WebSummaryArgs.model_validate(args)
+
+    try:
+        if validated_args.url not in MOCK_WEB_SUMMARIES:
+            return ToolResult(ok=False,
+                              content="调用WebSummary工具时出现错误。",
+                              error=f"请求的url为{validated_args.url},未命中mock数据"
+                              )
+        return ToolResult(ok=True,
+                          content=f"下面是{validated_args.url}网页的摘要:\n{MOCK_WEB_SUMMARIES[validated_args.url]["title"]}\n{MOCK_WEB_SUMMARIES[validated_args.url]["summary"]}",
+                          data={validated_args.url: MOCK_WEB_SUMMARIES[validated_args.url]}
+                          )
+    except Exception as e:
+        return ToolResult(ok=False,
+                          content="调用WebSummary工具时出现错误。",
+                          error=e.__str__())
 
 
 # =============================================================================
@@ -400,7 +531,14 @@ class InMemoryTodoStore:
         4. 返回新任务 dict。
         """
 
-        raise NotImplementedError("TODO 14：请实现 InMemoryTodoStore.add。")
+        task = {
+            "task_id": self._next_id.__str__(),
+            "title": title,
+            "done": False,
+        }
+        self._tasks.append(task)
+        self._next_id += 1
+        return task
 
     def list(self) -> list[dict[str, Any]]:
         """返回所有待办。"""
@@ -418,7 +556,10 @@ class InMemoryTodoStore:
         4. 找不到返回 None。
         """
 
-        raise NotImplementedError("TODO 15：请实现 InMemoryTodoStore.complete。")
+        result = next((task for task in self._tasks if task["task_id"] == task_id), None)
+        if result:
+            result["done"] = True
+        return result
 
 
 TODO_STORE = InMemoryTodoStore()
@@ -436,7 +577,24 @@ def run_todo(args: BaseModel) -> ToolResult:
     5. 找不到任务时返回 ok=False。
     """
 
-    raise NotImplementedError("TODO 16：请实现 run_todo。")
+    validated_args = TodoArgs.model_validate(args)
+    try:
+
+        if validated_args.action == "add":
+            new_task = TODO_STORE.add(validated_args.title)
+            return ToolResult(ok=True, content=f"成功新增代办事项:\n{new_task}", data=new_task)
+        elif validated_args.action == "list":
+            todo_list = TODO_STORE.list()
+            return ToolResult(ok=True, content=f"代办事项列表:\n{todo_list}", data={"todo_list": todo_list})
+        else:
+            done_task = TODO_STORE.complete(validated_args.task_id)
+            if not done_task:
+                return ToolResult(ok=False, content=f"找不到对应编号的代办事项: {validated_args.task_id}",
+                                  error=f"找不到对应编号的代办事项: {validated_args.task_id}")
+            return ToolResult(ok=True, content=f"已完成代办事项:\n{done_task}", data=done_task)
+
+    except Exception as e:
+        return ToolResult(ok=False, content="执行代办清单工具时发生错误", error=e.__str__())
 
 
 # =============================================================================
@@ -453,38 +611,38 @@ def build_default_registry() -> ToolRegistry:
 
     registry = ToolRegistry()
 
-    # registry.register(
-    #     ToolSpec(
-    #         name="calculator",
-    #         description="计算安全的数学表达式，支持加减乘除和括号。",
-    #         args_model=CalculatorArgs,
-    #         handler=run_calculator,
-    #     )
-    # )
-    # registry.register(
-    #     ToolSpec(
-    #         name="file_search",
-    #         description="在项目目录内搜索 .md 或 .txt 文件。",
-    #         args_model=FileSearchArgs,
-    #         handler=run_file_search,
-    #     )
-    # )
-    # registry.register(
-    #     ToolSpec(
-    #         name="web_summary_mock",
-    #         description="返回预设网页摘要，不访问真实网络。",
-    #         args_model=WebSummaryArgs,
-    #         handler=run_web_summary_mock,
-    #     )
-    # )
-    # registry.register(
-    #     ToolSpec(
-    #         name="todo",
-    #         description="管理待办事项，支持新增、查看、完成。",
-    #         args_model=TodoArgs,
-    #         handler=run_todo,
-    #     )
-    # )
+    registry.register(
+        ToolSpec(
+            name="calculator",
+            description="计算安全的数学表达式，支持加减乘除和括号。",
+            args_model=CalculatorArgs,
+            handler=run_calculator,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="file_search",
+            description="在项目目录内搜索 .md 或 .txt 文件。",
+            args_model=FileSearchArgs,
+            handler=run_file_search,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="web_summary_mock",
+            description="返回预设网页摘要，不访问真实网络。",
+            args_model=WebSummaryArgs,
+            handler=run_web_summary_mock,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="todo",
+            description="管理待办事项，支持新增、查看、完成。",
+            args_model=TodoArgs,
+            handler=run_todo,
+        )
+    )
 
     return registry
 
@@ -564,8 +722,8 @@ def run_self_check() -> None:
         ))
         add_result = registry.run("todo", {"action": "add", "title": "学习 Tool Calling"})
         task_id = None
-        if add_result.data and "task" in add_result.data:
-            task_id = add_result.data["task"]["id"]
+        if add_result.data:
+            task_id = add_result.data["task_id"]
         checks.append(("待办 add 成功", add_result.ok is True and task_id is not None))
         checks.append((
             "待办 complete 成功",
