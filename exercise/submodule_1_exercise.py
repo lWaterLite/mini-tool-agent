@@ -10,9 +10,9 @@
 6. 可选使用流式输出打印回答。
 
 运行示例：
-    python ask_llm.py "什么是 agent loop？"
-    python ask_llm.py --temperature 0.0 "用三句话解释 temperature"
-    python ask_llm.py --stream "请像技术助教一样解释 streaming"
+    python submodule_1_exercise.py "什么是 agent loop？"
+    python submodule_1_exercise.py --temperature 0.0 "用三句话解释 temperature"
+    python submodule_1_exercise.py --stream "请像技术助教一样解释 streaming"
 
 运行前准备：
     1. 安装 SDK：pip install openai
@@ -263,7 +263,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--env-file",
-        default=".env",
+        default="../.env",
         help="环境变量文件路径。默认读取当前目录下的 .env。",
     )
     parser.add_argument(
