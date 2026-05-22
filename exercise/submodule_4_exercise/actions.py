@@ -63,13 +63,13 @@ class AgentAction(BaseModel):
     @model_validator(mode="after")
     def validate_by_type(self) -> AgentAction:
         if self.type == "tool_call":
-            if self.tool_name is None:
-                raise ValidationError("tool_name must not be None when type is tool_call")
+            if not self.tool_name:
+                raise ValueError("当 type 为 tool_call 时，tool_name 不能为空。")
             if not isinstance(self.arguments, dict):
-                raise ValidationError("arguments must be a dict when type is tool_call")
-        if self.type == "tool_call":
+                raise ValueError("当 type 为 tool_call 时，arguments 的类型必须为 dict。")
+        if self.type == "final_answer":
             if not self.answer:
-                raise ValidationError("answer must not be None or empty when type is tool_call")
+                raise ValueError("当 type 为 final_answer 时，answer 不能为空。")
 
         return self
 
@@ -92,13 +92,13 @@ def parse_agent_action(raw_text: str) -> AgentAction:
 
     try:
         action_json = json.loads(raw_text)
-    except json.JSONDecodeError:
-        raise ActionParseError("action text is not valid json")
+    except json.JSONDecodeError as e:
+        raise ActionParseError(f"模型输出不是合法 JSON：{e}") from e
 
     try:
         agent_action = AgentAction.model_validate(action_json)
     except ValidationError as e:
-        raise ActionParseError("failed to validate action json: " + e)
+        raise ActionParseError(f"模型决策字段校验失败: {e}") from e
 
     return agent_action
 
