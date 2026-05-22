@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-
 AGENT_SYSTEM_PROMPT_TEMPLATE = """
 你是一个最小 tool agent。
 你需要在每一步只输出一个 JSON 对象。
@@ -66,7 +65,8 @@ def build_system_prompt(tools_schema: list[dict[str, Any]]) -> str:
     - schema 太长时会有什么问题？
     """
 
-    raise NotImplementedError("TODO 4：请实现 build_system_prompt。")
+    tools_json = json.dumps(tools_schema, indent=2, ensure_ascii=False)
+    return AGENT_SYSTEM_PROMPT_TEMPLATE.format(tools_json=tools_json)
 
 
 def build_initial_messages(system_prompt: str, user_input: str) -> list[dict[str, str]]:
@@ -92,7 +92,11 @@ def build_tool_message(tool_name: str, tool_result_json: str) -> dict[str, str]:
     - 工具结果应该给用户看，还是给模型继续观察？
     """
 
-    raise NotImplementedError("TODO 5：请实现 build_tool_message。")
+    return {
+        "role": "tool",
+        "content": tool_result_json,
+        "name": tool_name,
+    }
 
 
 def summarize_messages(messages: list[dict[str, str]]) -> str:
@@ -106,4 +110,3 @@ def summarize_messages(messages: list[dict[str, str]]) -> str:
             compact = compact[:100] + "..."
         lines.append(f"{index}. {message.get('role')}: {compact}")
     return "\n".join(lines)
-
