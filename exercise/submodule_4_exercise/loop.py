@@ -15,15 +15,11 @@ from typing import Any, Protocol
 
 from exercise.submodule_3_exercise import ToolRegistry, build_default_registry
 from exercise.submodule_4_exercise.actions import (
-    ActionParseError,
-    AgentAction,
-    action_to_assistant_message,
-    parse_agent_action,
+    AgentAction, parse_agent_action, action_to_assistant_message,
 )
 from exercise.submodule_4_exercise.prompts import (
     build_initial_messages,
-    build_system_prompt,
-    build_tool_message,
+    build_system_prompt, build_tool_message,
 )
 
 
@@ -88,9 +84,51 @@ class MiniAgent:
         - max_steps 统计的是模型决策次数，还是工具调用次数？
         """
 
-        raise NotImplementedError("TODO 7：请实现 MiniAgent.run。")
+        system_prompt: str = build_system_prompt(self.registry.list_tools())
+        messages = build_initial_messages(system_prompt, user_input)
+        steps_log: list[dict[str, Any]] = []
+        current_trace_id = new_trace_id()
 
-    def execute_tool(self, action: AgentAction) -> tuple[dict[str, Any], str]:
+        try:
+            for step in range(1, self.max_steps + 1):
+                raw_output = self.llm.complete(messages)
+                agent_action = parse_agent_action(raw_output)
+                messages.append(action_to_assistant_message(agent_action))
+
+                if agent_action.type == "final_answer":
+                    step_log = make_step_log(step=step,
+                                             trace_id=current_trace_id,
+                                             event=agent_action.type,
+                                             final_answer=agent_action.answer)
+                    steps_log.append(step_log)
+
+                    return AgentRunResult(
+                        ok=True,
+                        final_answer=agent_action.answer,
+                        trace_id=current_trace_id,
+                        steps=steps_log,
+                        messages=messages
+                    )
+                elif agent_action.type == "tool_call":
+                    tool_step_log, tool_message = self.__execute_tool(agent_action, step, current_trace_id)
+                    steps_log.append(tool_step_log)
+                    messages.append(build_tool_message(tool_step_log["tool_name"], tool_message))
+
+                    if not tool_step_log["ok"]:
+                        return self.__fail(
+                            trace_id=current_trace_id,
+                            messages=messages,
+                            steps=steps_log,
+                            error=tool_step_log.get("error") or "工具调用失败",
+                        )
+
+        except Exception as e:
+            return self.__fail(trace_id=current_trace_id, messages=messages, steps=steps_log, error=str(e))
+
+        return self.__fail(trace_id=current_trace_id, messages=messages, steps=steps_log,
+                           error="agent loop 超出轮数限制")
+
+    def __execute_tool(self, action: AgentAction, step: int, trace_id: str) -> tuple[dict[str, Any], str]:
         """执行工具并返回 step 日志和工具消息内容。
 
         TODO 8：
@@ -108,14 +146,32 @@ class MiniAgent:
         - 日志里是否应该记录完整 arguments？什么时候需要脱敏？
         """
 
-        raise NotImplementedError("TODO 8：请实现 MiniAgent.execute_tool。")
+        # action.typ e已在 agent loop 中判断
+        # action.tool_name 字段已经在 agent loop 中校验
 
-    def _fail(
-        self,
-        trace_id: str,
-        messages: list[dict[str, str]],
-        steps: list[dict[str, Any]],
-        error: str,
+        start_time = time.perf_counter()
+        tool_result = self.registry.run(action.tool_name, action.arguments)
+        end_time = time.perf_counter()
+        latency_ms = (end_time - start_time) * 1000
+        step_log = make_step_log(
+            step=step,
+            trace_id=trace_id,
+            event=action.type,
+            tool_name=action.tool_name,
+            arguments=action.arguments,
+            ok=tool_result.ok,
+            error=tool_result.error,
+            latency_ms=latency_ms,
+        )
+        tool_result_json = tool_result.model_dump_json()
+        return step_log, tool_result_json
+
+    @staticmethod
+    def __fail(
+            trace_id: str,
+            messages: list[dict[str, str]],
+            steps: list[dict[str, Any]],
+            error: str,
     ) -> AgentRunResult:
         """构造失败结果。"""
 
@@ -130,9 +186,10 @@ class MiniAgent:
 
 
 def make_step_log(
-    step: int,
-    event: str,
-    **extra: Any,
+        step: int,
+        trace_id: str,
+        event: str,
+        **extra: Any,
 ) -> dict[str, Any]:
     """构造结构化 step 日志。
 
@@ -144,11 +201,10 @@ def make_step_log(
     - 额外字段
     """
 
-    return {"step": step, "event": event, **extra}
+    return {"trace_id": trace_id, "step": step, "event": event, **extra}
 
 
 def new_trace_id() -> str:
     """生成 trace id。"""
 
     return uuid.uuid4().hex[:12]
-
