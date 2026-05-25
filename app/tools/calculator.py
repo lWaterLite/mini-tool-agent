@@ -3,6 +3,8 @@ import operator
 
 from pydantic import BaseModel, Field
 
+from typing import Callable
+
 from app.core.errors import AppError, ErrorCode
 from app.tools.base import BaseTool, ToolResult
 
@@ -39,22 +41,23 @@ def safe_eval(expression: str, trace_id: str) -> float:
 
     return _eval_node(tree.body, trace_id)
 
-
-def _eval_node(node: ast.AST, trace_id: str) -> float:
-    binary_operators = {
+BINARY_OPERATORS: dict[type[ast.operator], Callable[[float, float], float]] = {
         ast.Add: operator.add,
         ast.Sub: operator.sub,
         ast.Mult: operator.mul,
         ast.Div: operator.truediv,
     }
 
+def _eval_node(node: ast.AST, trace_id: str) -> float:
+
+
     if isinstance(node, ast.Constant) and isinstance(node.value, int | float):
         return float(node.value)
 
     if isinstance(node, ast.BinOp):
-        operator_func = binary_operators.get(type(node.op))
+        operator_func = BINARY_OPERATORS.get(type(node.op))
         if operator_func is None:
-            raise AppError(ErrorCode.TOOL_EXECUTION_ERROR, "不支持的数学运算符", trace_id=trace_id)
+            raise AppError(ErrorCode.TOOL_EXECUTION_ERROR, f"不支持的数学运算符: {node.op.__str__()}", trace_id=trace_id)
         left = _eval_node(node.left, trace_id)
         right = _eval_node(node.right, trace_id)
         return operator_func(left, right)
@@ -62,5 +65,8 @@ def _eval_node(node: ast.AST, trace_id: str) -> float:
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
         return -_eval_node(node.operand, trace_id)
 
-    raise AppError(ErrorCode.TOOL_EXECUTION_ERROR, "表达式包含不允许的内容", trace_id=trace_id)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd):
+        return +_eval_node(node.operand, trace_id)
+
+    raise AppError(ErrorCode.TOOL_EXECUTION_ERROR, f"表达式包含不允许的内容: {node.__str__()}", trace_id=trace_id)
 
