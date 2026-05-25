@@ -1,21 +1,22 @@
 import ast
 import operator
+from collections.abc import Callable
 
 from pydantic import BaseModel, Field
-
-from typing import Callable
 
 from app.core.errors import AppError, ErrorCode
 from app.tools.base import BaseTool, ToolResult
 
+MAX_POWER_EXPONENT = 8
+
 
 class CalculatorArgs(BaseModel):
-    expression: str = Field(..., min_length=1, max_length=120, description="只包含数字和四则运算符的表达式")
+    expression: str = Field(..., min_length=1, max_length=120, description="只包含数字、括号、四则运算和受限幂运算的表达式")
 
 
 class CalculatorTool(BaseTool):
     name = "calculator"
-    description = "执行安全的四则运算表达式计算。"
+    description = "执行安全的数学表达式计算，支持 +、-、*、/、括号、一元正负号和受限幂运算。"
     args_model = CalculatorArgs
 
     async def arun(self, arguments: dict[str, object], trace_id: str) -> ToolResult:
@@ -28,11 +29,7 @@ class CalculatorTool(BaseTool):
 def safe_eval(expression: str, trace_id: str) -> float:
     """使用 AST 白名单实现安全计算。
 
-    TODO 练习 6：
-    现在只支持 +、-、*、/ 和括号。请尝试加入：
-    - 幂运算，但限制指数范围。
-    - 一元正号。
-    - 更友好的错误提示。
+    只允许安全节点进入递归求值，不执行函数调用、属性访问、变量读取等任意代码。
     """
     try:
         tree = ast.parse(expression, mode="eval")
@@ -41,26 +38,38 @@ def safe_eval(expression: str, trace_id: str) -> float:
 
     return _eval_node(tree.body, trace_id)
 
+
 BINARY_OPERATORS: dict[type[ast.operator], Callable[[float, float], float]] = {
-        ast.Add: operator.add,
-        ast.Sub: operator.sub,
-        ast.Mult: operator.mul,
-        ast.Div: operator.truediv,
-    }
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
+}
+
 
 def _eval_node(node: ast.AST, trace_id: str) -> float:
-
-
-    if isinstance(node, ast.Constant) and isinstance(node.value, int | float):
+    if isinstance(node, ast.Constant) and type(node.value) in {int, float}:
         return float(node.value)
 
     if isinstance(node, ast.BinOp):
         operator_func = BINARY_OPERATORS.get(type(node.op))
         if operator_func is None:
-            raise AppError(ErrorCode.TOOL_EXECUTION_ERROR, f"不支持的数学运算符: {node.op.__str__()}", trace_id=trace_id)
+            raise AppError(ErrorCode.TOOL_EXECUTION_ERROR, f"不支持的数学运算符：{type(node.op).__name__}", trace_id=trace_id)
         left = _eval_node(node.left, trace_id)
         right = _eval_node(node.right, trace_id)
-        return operator_func(left, right)
+        if isinstance(node.op, ast.Div) and right == 0:
+            raise AppError(ErrorCode.TOOL_EXECUTION_ERROR, "除数不能为 0", trace_id=trace_id)
+        if isinstance(node.op, ast.Pow) and abs(right) > MAX_POWER_EXPONENT:
+            raise AppError(
+                ErrorCode.TOOL_EXECUTION_ERROR,
+                f"幂运算指数过大，指数绝对值不能超过 {MAX_POWER_EXPONENT}",
+                trace_id=trace_id,
+            )
+        try:
+            return operator_func(left, right)
+        except OverflowError as exc:
+            raise AppError(ErrorCode.TOOL_EXECUTION_ERROR, "计算结果过大", trace_id=trace_id) from exc
 
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
         return -_eval_node(node.operand, trace_id)
@@ -68,5 +77,10 @@ def _eval_node(node: ast.AST, trace_id: str) -> float:
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd):
         return +_eval_node(node.operand, trace_id)
 
-    raise AppError(ErrorCode.TOOL_EXECUTION_ERROR, f"表达式包含不允许的内容: {node.__str__()}", trace_id=trace_id)
+    if isinstance(node, ast.Name):
+        raise AppError(ErrorCode.TOOL_EXECUTION_ERROR, f"不允许使用变量：{node.id}", trace_id=trace_id)
 
+    if isinstance(node, ast.Call):
+        raise AppError(ErrorCode.TOOL_EXECUTION_ERROR, "不允许调用函数", trace_id=trace_id)
+
+    raise AppError(ErrorCode.TOOL_EXECUTION_ERROR, f"表达式包含不允许的内容：{type(node).__name__}", trace_id=trace_id)

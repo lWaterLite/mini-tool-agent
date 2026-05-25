@@ -1,5 +1,6 @@
 import re
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import status
@@ -8,6 +9,22 @@ from app.agent.models import AgentEvent, AgentResult, ToolCallRecord
 from app.core.config import Settings
 from app.core.errors import AppError, ErrorCode
 from app.tools.registry import ToolRegistry
+
+
+@dataclass(frozen=True)
+class PlannedToolCall:
+    """Agent 规划出的单个工具步骤。"""
+
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class AgentPlan:
+    """Agent 对本次请求的计划。"""
+
+    tool_calls: list[PlannedToolCall]
+    clarification: str | None = None
 
 
 class AgentService:
@@ -21,10 +38,21 @@ class AgentService:
         self._tools = tool_registry
         self._settings = settings
 
-    async def run(self, message: str, trace_id: str, session_id: str | None = None) -> AgentResult:
+    async def run(
+        self,
+        message: str,
+        trace_id: str,
+        session_id: str | None = None,
+        max_steps: int | None = None,
+    ) -> AgentResult:
         """一次性执行 Agent，并返回最终结果。"""
         events: list[AgentEvent] = []
-        async for event in self.stream(message=message, trace_id=trace_id, session_id=session_id):
+        async for event in self.stream(
+            message=message,
+            trace_id=trace_id,
+            session_id=session_id,
+            max_steps=max_steps,
+        ):
             events.append(event)
 
         final_events = [event for event in events if event.event == "final"]
@@ -55,6 +83,7 @@ class AgentService:
         message: str,
         trace_id: str,
         session_id: str | None = None,
+        max_steps: int | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """流式执行 Agent。
 
@@ -67,14 +96,23 @@ class AgentService:
         if not cleaned_message:
             raise AppError(ErrorCode.INVALID_REQUEST, "用户消息不能为空", trace_id=trace_id)
 
+        resolved_max_steps = self._resolve_max_steps(max_steps)
         yield AgentEvent(
             event="start",
             trace_id=trace_id,
-            data={"message": cleaned_message, "session_id": session_id},
+            data={"message": cleaned_message, "session_id": session_id, "max_steps": resolved_max_steps},
         )
 
-        plan = self._plan(cleaned_message)
-        if plan is None:
+        plan = self._plan(cleaned_message, session_id=session_id)
+        if plan.clarification is not None:
+            yield AgentEvent(
+                event="final",
+                trace_id=trace_id,
+                data={"answer": plan.clarification, "used_tools": []},
+            )
+            return
+
+        if not plan.tool_calls:
             answer = "我已经收到你的消息。当前练习版 Agent 可以处理计算、文件搜索、网页摘要和待办事项。"
             yield AgentEvent(
                 event="final",
@@ -83,82 +121,159 @@ class AgentService:
             )
             return
 
-        tool_name, arguments = plan
-        yield AgentEvent(
-            event="tool_call",
-            trace_id=trace_id,
-            data={"name": tool_name, "arguments": arguments},
-        )
+        if len(plan.tool_calls) > resolved_max_steps:
+            raise AppError(
+                ErrorCode.INVALID_REQUEST,
+                f"本次请求计划执行 {len(plan.tool_calls)} 个工具步骤，超过 max_steps={resolved_max_steps}",
+                trace_id=trace_id,
+            )
 
-        tool = self._tools.get(tool_name)
-        result = await tool.arun(arguments, trace_id=trace_id)
+        records: list[ToolCallRecord] = []
+        for index, planned_call in enumerate(plan.tool_calls, start=1):
+            yield AgentEvent(
+                event="tool_call",
+                trace_id=trace_id,
+                data={"step": index, "name": planned_call.name, "arguments": planned_call.arguments},
+            )
 
-        yield AgentEvent(
-            event="tool_result",
-            trace_id=trace_id,
-            data={
-                "name": tool_name,
-                "arguments": arguments,
-                "result": result.model_dump(),
-            },
-        )
+            tool = self._tools.get(planned_call.name)
+            result = await tool.arun(planned_call.arguments, trace_id=trace_id)
+            record = ToolCallRecord(
+                name=planned_call.name,
+                arguments=planned_call.arguments,
+                result=result.model_dump(),
+            )
+            records.append(record)
+
+            yield AgentEvent(
+                event="tool_result",
+                trace_id=trace_id,
+                data=record.model_dump(),
+            )
 
         yield AgentEvent(
             event="final",
             trace_id=trace_id,
             data={
-                "answer": self._build_answer(tool_name, result.output),
-                "used_tools": [tool_name],
+                "answer": self._build_final_answer(records),
+                "used_tools": [record.name for record in records],
             },
         )
 
-    def _plan(self, message: str) -> tuple[str, dict[str, Any]] | None:
+    def _resolve_max_steps(self, max_steps: int | None) -> int:
+        if max_steps is not None:
+            return max_steps
+        return self._settings.max_agent_steps
+
+    def _plan(self, message: str, session_id: str | None) -> AgentPlan:
         """根据用户输入选择工具。
 
-        TODO 练习 5：
-        当前 planner 是规则型实现。请尝试新增：
-        - 更稳健的文件搜索意图识别。
-        - 多工具组合，例如先搜索文件再总结。
-        - 当意图不明确时返回澄清问题，而不是直接猜工具。
+        这是规则型 planner，不追求像真实 LLM 那样理解所有自然语言。
+        它的价值是让你能清楚看到“规划 -> 执行工具 -> 汇总回答”的工程边界。
         """
+        tool_calls: list[PlannedToolCall] = []
+
         expression = self._extract_expression(message)
         if expression:
-            return "calculator", {"expression": expression}
+            tool_calls.append(PlannedToolCall("calculator", {"expression": expression}))
 
-        if message.startswith("搜索文件") or message.startswith("查找文件"):
-            query = message.replace("搜索文件", "", 1).replace("查找文件", "", 1).strip()
-            return "file_search", {"query": query or message, "max_results": self._settings.max_file_search_results}
+        file_query = self._extract_file_query(message)
+        if file_query == "":
+            return AgentPlan(
+                tool_calls=[],
+                clarification="你想搜索文件，但没有说明关键词。请告诉我要搜索什么内容。",
+            )
+        if file_query is not None:
+            tool_calls.append(
+                PlannedToolCall(
+                    "file_search",
+                    {"query": file_query, "max_results": self._settings.max_file_search_results},
+                )
+            )
 
-        if "http://" in message or "https://" in message:
-            url = self._extract_url(message)
-            return "web_summary_mock", {"url": url}
+        url = self._extract_url(message)
+        if url is not None:
+            tool_calls.append(PlannedToolCall("web_summary_mock", {"url": url}))
 
-        if message.startswith("添加待办"):
-            content = message.replace("添加待办", "", 1).strip()
-            return "todo", {"action": "add", "content": content}
+        tool_calls.extend(self._extract_todo_calls(message, session_id=session_id))
 
-        if "查看待办" in message or "待办列表" in message:
-            return "todo", {"action": "list"}
-
-        return None
+        return AgentPlan(tool_calls=tool_calls)
 
     def _extract_expression(self, message: str) -> str | None:
-        if "计算" not in message and not re.search(r"\d+\s*[\+\-\*/]", message):
+        if "计算" not in message and not re.search(r"\d+\s*[\+\-\*/\^]", message):
             return None
 
         candidate = message.replace("帮我", "").replace("请", "").replace("计算", "").strip()
         candidate = candidate.replace("等于多少", "").replace("是多少", "").strip()
-        if re.fullmatch(r"[0-9\.\+\-\*/\(\)\s]+", candidate):
-            return candidate
+        candidate = candidate.replace("^", "**")
+        match = re.search(r"[0-9\.\+\-\*/\*\(\)\s]+", candidate)
+        if match is None:
+            return None
+        expression = match.group(0).strip()
+        if expression and re.fullmatch(r"[0-9\.\+\-\*/\*\(\)\s]+", expression):
+            return expression
         return None
 
-    def _extract_url(self, message: str) -> str:
+    def _extract_file_query(self, message: str) -> str | None:
+        search_markers = ("搜索文件", "查找文件", "搜索文档", "查找文档", "文件里找", "文档里找")
+        if not any(marker in message for marker in search_markers):
+            return None
+
+        query = message
+        for marker in search_markers:
+            query = query.replace(marker, " ")
+        query = re.sub(r"(帮我|请|一下|关于|包含|关键词|并总结|总结)", " ", query)
+        query = re.sub(r"https?://\S+", " ", query)
+        query = re.sub(r"\s+", " ", query).strip(" ，。,.")
+        return query
+
+    def _extract_url(self, message: str) -> str | None:
         match = re.search(r"https?://\S+", message)
         if match is None:
-            raise AppError(ErrorCode.INVALID_REQUEST, "没有找到 URL")
-        return match.group(0)
+            return None
+        return match.group(0).rstrip("，。,.")
 
-    def _build_answer(self, tool_name: str, output: str) -> str:
+    def _extract_todo_calls(self, message: str, session_id: str | None) -> list[PlannedToolCall]:
+        calls: list[PlannedToolCall] = []
+        normalized_session_id = session_id or "default"
+
+        if "添加待办" in message:
+            content = message.split("添加待办", 1)[1]
+            content = re.split(r"(然后|并且|并查看|查看待办|待办列表)", content, maxsplit=1)[0].strip(" ：:，。,.")
+            if not content:
+                return [PlannedToolCall("todo", {"action": "list", "session_id": normalized_session_id})]
+            calls.append(
+                PlannedToolCall(
+                    "todo",
+                    {"action": "add", "content": content, "session_id": normalized_session_id},
+                )
+            )
+
+        done_match = re.search(r"(完成待办|标记完成)\s*(?P<item_id>todo_[0-9a-fA-F]+)", message)
+        if done_match is not None:
+            calls.append(
+                PlannedToolCall(
+                    "todo",
+                    {"action": "done", "item_id": done_match.group("item_id"), "session_id": normalized_session_id},
+                )
+            )
+
+        if "查看待办" in message or "待办列表" in message:
+            calls.append(PlannedToolCall("todo", {"action": "list", "session_id": normalized_session_id}))
+
+        return calls
+
+    def _build_final_answer(self, records: list[ToolCallRecord]) -> str:
+        if len(records) == 1:
+            return self._build_single_tool_answer(records[0].name, str(records[0].result["output"]))
+
+        lines = [f"已完成 {len(records)} 个工具步骤："]
+        for index, record in enumerate(records, start=1):
+            output = str(record.result["output"])
+            lines.append(f"{index}. {record.name}：{output}")
+        return "\n".join(lines)
+
+    def _build_single_tool_answer(self, tool_name: str, output: str) -> str:
         if tool_name == "calculator":
             return f"计算结果：{output}"
         if tool_name == "file_search":
@@ -168,4 +283,3 @@ class AgentService:
         if tool_name == "todo":
             return f"待办事项结果：{output}"
         return output
-

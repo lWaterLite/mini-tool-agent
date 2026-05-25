@@ -22,10 +22,12 @@ class ToolsResponse(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000, description="用户输入消息")
     session_id: str | None = Field(default=None, max_length=80, description="可选会话 ID")
-
-    # TODO 练习 2：
-    # 添加一个 max_steps 字段，限制 Agent Loop 最多执行多少步。
-    # 思考：这个限制应该放在 API 请求里、Settings 里，还是两者都支持？
+    max_steps: int | None = Field(
+        default=None,
+        ge=1,
+        le=10,
+        description="本次请求允许 Agent 最多执行多少个工具步骤；不传时使用服务默认配置",
+    )
 
 
 class ToolCallView(BaseModel):
@@ -55,4 +57,3 @@ class StreamEvent(BaseModel):
     event: str = Field(description="事件名称，例如 start、tool_call、final、error")
     trace_id: str
     data: dict[str, Any] = Field(default_factory=dict)
-

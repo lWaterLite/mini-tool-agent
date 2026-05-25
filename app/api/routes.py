@@ -40,7 +40,12 @@ def list_tools(state: AppState = Depends(get_app_state)) -> ToolsResponse:
 async def chat(request: ChatRequest, state: AppState = Depends(get_app_state)) -> ChatResponse:
     """异步接口示例：Agent 未来可能调用 LLM、数据库、HTTP 服务，所以这里使用 async。"""
     trace_id = new_trace_id()
-    result = await state.agent.run(message=request.message, trace_id=trace_id, session_id=request.session_id)
+    result = await state.agent.run(
+        message=request.message,
+        trace_id=trace_id,
+        session_id=request.session_id,
+        max_steps=request.max_steps,
+    )
 
     return ChatResponse(
         answer=result.answer,
@@ -50,7 +55,7 @@ async def chat(request: ChatRequest, state: AppState = Depends(get_app_state)) -
             ToolCallView(
                 name=call.name,
                 arguments=call.arguments,
-                result=result
+                result=call.result,
             )
             for call in result.tool_calls
         ],
@@ -63,8 +68,12 @@ async def chat_stream(request: ChatRequest, state: AppState = Depends(get_app_st
     trace_id = new_trace_id()
 
     async def event_source() -> AsyncIterator[str]:
-        async for event in state.agent.stream(message=request.message, trace_id=trace_id,
-                                              session_id=request.session_id):
+        async for event in state.agent.stream(
+            message=request.message,
+            trace_id=trace_id,
+            session_id=request.session_id,
+            max_steps=request.max_steps,
+        ):
             payload = json.dumps(event.model_dump(), ensure_ascii=False)
             yield f"event: {event.event}\ndata: {payload}\n\n"
 

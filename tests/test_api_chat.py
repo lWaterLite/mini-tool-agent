@@ -40,6 +40,13 @@ def test_chat_with_calculator() -> None:
     assert body["tool_calls"][0]["name"] == "calculator"
 
 
+def test_chat_rejects_too_small_max_steps() -> None:
+    response = client.post("/chat", json={"message": "计算 1 + 2 并查看待办", "max_steps": 1})
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_REQUEST"
+
+
 def test_chat_validation_error() -> None:
     response = client.post("/chat", json={"message": ""})
 
@@ -55,4 +62,3 @@ def test_chat_stream() -> None:
     assert "event: start" in body
     assert "event: tool_call" in body
     assert "event: final" in body
-

@@ -5,7 +5,10 @@ from fastapi import Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from app.core.logging import get_logger
 from app.core.trace import new_trace_id
+
+logger = get_logger(__name__)
 
 
 class ErrorCode(StrEnum):
@@ -71,17 +74,17 @@ async def validation_error_handler(_: Request, exc: RequestValidationError) -> J
 async def unexpected_error_handler(_: Request, exc: Exception) -> JSONResponse:
     """兜底异常处理。
 
-    TODO 练习 3：
-    当前这里没有记录异常日志。请尝试接入 logger.exception，
-    但注意不要把完整异常栈直接返回给 API 调用方。
+    异常栈写入服务日志，响应体只返回统一错误码和 trace id。
     """
+    trace_id = new_trace_id()
+    logger.error("未处理异常 trace_id=%s", trace_id, exc_info=(type(exc), exc, exc.__traceback__))
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
             "error": {
                 "code": ErrorCode.INTERNAL_ERROR,
                 "message": "服务内部错误",
-                "trace_id": new_trace_id(),
+                "trace_id": trace_id,
             }
         },
     )
