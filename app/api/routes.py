@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from app.api.dependencies import AppState, get_app_state
-from app.api.schemas import ChatRequest, ChatResponse, HealthResponse, ToolInfo, ToolsResponse
+from app.api.schemas import ChatRequest, ChatResponse, HealthResponse, ToolInfo, ToolsResponse, ToolCallView
 from app.core.trace import new_trace_id
 
 router = APIRouter()
@@ -47,11 +47,11 @@ async def chat(request: ChatRequest, state: AppState = Depends(get_app_state)) -
         used_tools=result.used_tools,
         trace_id=result.trace_id,
         tool_calls=[
-            {
-                "name": call.name,
-                "arguments": call.arguments,
-                "result": call.result,
-            }
+            ToolCallView(
+                name=call.name,
+                arguments=call.arguments,
+                result=result
+            )
             for call in result.tool_calls
         ],
     )
