@@ -6,6 +6,7 @@ from fastapi.responses import StreamingResponse
 
 from app.api.dependencies import AppState, get_app_state
 from app.api.schemas import ChatRequest, ChatResponse, HealthResponse, ToolInfo, ToolsResponse, ToolCallView
+from app.core.errors import AppError, ErrorCode
 from app.core.trace import new_trace_id
 
 router = APIRouter()
@@ -68,13 +69,40 @@ async def chat_stream(request: ChatRequest, state: AppState = Depends(get_app_st
     trace_id = new_trace_id()
 
     async def event_source() -> AsyncIterator[str]:
-        async for event in state.agent.stream(
-            message=request.message,
-            trace_id=trace_id,
-            session_id=request.session_id,
-            max_steps=request.max_steps,
-        ):
-            payload = json.dumps(event.model_dump(), ensure_ascii=False)
-            yield f"event: {event.event}\ndata: {payload}\n\n"
+        try:
+            async for event in state.agent.stream(
+                    message=request.message,
+                    trace_id=trace_id,
+                    session_id=request.session_id,
+                    max_steps=request.max_steps,
+            ):
+                payload = json.dumps(event.model_dump(), ensure_ascii=False)
+                yield f"event: {event.event}\ndata: {payload}\n\n"
+        except AppError as e:
+            payload = json.dumps(
+                {
+                    "event": "error",
+                    "trace_id": e.trace_id or trace_id,
+                    "data": {
+                        "code": e.code,
+                        "message": e.message
+                    }
+                },
+                ensure_ascii=False,
+            )
+            yield f"event: error\ndata: {payload}\n\n"
+        except Exception:
+            payload = json.dumps(
+                {
+                    "event": "error",
+                    "trace_id": trace_id,
+                    "data": {
+                        "code": ErrorCode.INTERNAL_ERROR,
+                        "message": "服务器内部错误"
+                    }
+                },
+                ensure_ascii=False,
+            )
+            yield f"event: error\ndata: {payload}\n\n"
 
     return StreamingResponse(event_source(), media_type="text/event-stream")
