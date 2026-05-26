@@ -40,6 +40,28 @@ def test_chat_with_calculator() -> None:
     assert body["tool_calls"][0]["name"] == "calculator"
 
 
+def test_chat_with_todo_uses_session_id() -> None:
+    add_response = client.post(
+        "/chat",
+        json={"message": "添加待办 学习 mock", "session_id": "api_student"},
+    )
+    list_response = client.post(
+        "/chat",
+        json={"message": "查看待办", "session_id": "api_student"},
+    )
+
+    assert add_response.status_code == 200
+    assert list_response.status_code == 200
+    assert "学习 mock" in list_response.json()["answer"]
+
+
+def test_chat_rejects_invalid_max_steps_type() -> None:
+    response = client.post("/chat", json={"message": "你好", "max_steps": "很多步"})
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INVALID_REQUEST"
+
+
 def test_chat_rejects_too_small_max_steps() -> None:
     response = client.post("/chat", json={"message": "计算 1 + 2 并查看待办", "max_steps": 1})
 

@@ -17,6 +17,20 @@ def test_safe_eval_rejects_too_large_power() -> None:
         safe_eval("2 ** 99", "trace_test")
 
 
+def test_safe_eval_rejects_division_by_zero() -> None:
+    with pytest.raises(AppError) as exc_info:
+        safe_eval("1 / 0", "trace_test")
+
+    assert exc_info.value.code == "TOOL_EXECUTION_ERROR"
+
+
+def test_safe_eval_rejects_variable_name() -> None:
+    with pytest.raises(AppError) as exc_info:
+        safe_eval("a + 1", "trace_test")
+
+    assert exc_info.value.code == "TOOL_EXECUTION_ERROR"
+
+
 def test_safe_eval_rejects_function_call() -> None:
     with pytest.raises(AppError):
         safe_eval("__import__('os').system('echo bad')", "trace_test")
