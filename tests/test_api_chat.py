@@ -1,9 +1,10 @@
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.core.config import Settings
+from app.main import create_app
 
 
-client = TestClient(app)
+client = TestClient(create_app(Settings(agent_planner_mode="mock")))
 
 
 def test_health() -> None:

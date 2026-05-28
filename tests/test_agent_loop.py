@@ -1,6 +1,7 @@
 import pytest
 
 from app.agent.loop import AgentService
+from app.agent.models import AgentPlan
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.tools.calculator import CalculatorTool
@@ -8,6 +9,11 @@ from app.tools.file_search import FileSearchTool
 from app.tools.registry import ToolRegistry
 from app.tools.todo import TodoStore, TodoTool
 from app.tools.web_summary_mock import WebSummaryMockTool
+
+
+class DirectAnswerPlanner:
+    async def plan(self, message: str, session_id: str | None) -> AgentPlan:
+        return AgentPlan(tool_calls=[], direct_answer="这是 planner 生成的直接回答。")
 
 
 @pytest.mark.asyncio
@@ -81,3 +87,14 @@ async def test_agent_uses_web_summary_mock_for_url() -> None:
 
     assert result.used_tools == ["web_summary_mock"]
     assert "网页摘要" in result.answer
+
+
+@pytest.mark.asyncio
+async def test_agent_uses_planner_direct_answer_when_no_tool_calls() -> None:
+    registry = ToolRegistry()
+    agent = AgentService(registry, Settings(), planner=DirectAnswerPlanner())
+
+    result = await agent.run("你好", trace_id="trace_test")
+
+    assert result.answer == "这是 planner 生成的直接回答。"
+    assert result.used_tools == []

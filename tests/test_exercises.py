@@ -3,9 +3,10 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.core.config import Settings
+from app.main import create_app
 
-client = TestClient(app)
+client = TestClient(create_app(Settings(agent_planner_mode="mock")))
 
 
 # @pytest.mark.skip(reason="练习题：实现 streaming 错误事件后，再取消跳过并补充断言。")

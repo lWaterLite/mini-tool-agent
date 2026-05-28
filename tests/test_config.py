@@ -24,3 +24,15 @@ def test_settings_rejects_invalid_calculator_max_power_exponent(monkeypatch: pyt
 
     with pytest.raises(ValueError, match="CALCULATOR_MAX_POWER_EXPONENT"):
         Settings.from_env()
+
+
+def test_settings_reads_agent_planner_mode_and_llm_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENT_PLANNER_MODE", "llm")
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_MODEL", "test-model")
+
+    settings = Settings.from_env()
+
+    assert settings.agent_planner_mode == "llm"
+    assert settings.llm_api_key == "test-key"
+    assert settings.llm_model == "test-model"
