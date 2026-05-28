@@ -1,7 +1,8 @@
 import pytest
 
 from app.core.errors import AppError
-from app.tools.calculator import safe_eval
+from app.tools.calculator import CalculatorTool, safe_eval
+from app.core.tool_settings import CalculatorSettings
 
 
 def test_safe_eval_basic_expression() -> None:
@@ -15,6 +16,23 @@ def test_safe_eval_supports_limited_power_and_unary_plus() -> None:
 def test_safe_eval_rejects_too_large_power() -> None:
     with pytest.raises(AppError):
         safe_eval("2 ** 99", "trace_test")
+
+
+def test_safe_eval_uses_custom_power_exponent_limit() -> None:
+    settings = CalculatorSettings(max_power_exponent=2)
+
+    with pytest.raises(AppError) as exc_info:
+        safe_eval("2 ** 3", "trace_test", settings)
+
+    assert "指数绝对值不能超过 2" in exc_info.value.message
+
+
+def test_calculator_tool_uses_injected_settings() -> None:
+    tool = CalculatorTool(CalculatorSettings(max_power_exponent=3))
+
+    assert tool.safe_eval("2 ** 3", "trace_test") == 8
+    with pytest.raises(AppError):
+        tool.safe_eval("2 ** 4", "trace_test")
 
 
 def test_safe_eval_rejects_division_by_zero() -> None:
