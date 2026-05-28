@@ -210,6 +210,16 @@ class AgentService:
                     error_code=exc.code,
                     error_message=exc.message,
                 )
+
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "request_finished",
+                    trace_id=trace_id,
+                    final_status="error",
+                    error_code=exc.code,
+                    used_tools=[record.name for record in records] + [planned_call.name],
+                )
                 raise
             except Exception:
                 log_event(
@@ -222,6 +232,16 @@ class AgentService:
                     latency_ms=round((perf_counter() - started_at) * 1000, 2),
                     error_code=ErrorCode.INTERNAL_ERROR,
                     error_message="未处理工具异常",
+                )
+
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "request_finished",
+                    trace_id=trace_id,
+                    final_status="error",
+                    error_code=ErrorCode.INTERNAL_ERROR,
+                    used_tools=[record.name for record in records] + [planned_call.name],
                 )
                 raise
 
