@@ -8,3 +8,6 @@ pytest-cache-files-*/
 .ruff_cache/
 .tmp/
 .idea
+htmlcov/
+.coverage
+coverage.xml
