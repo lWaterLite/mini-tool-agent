@@ -70,7 +70,7 @@ def default_tool_factories() -> list[ToolFactory]:
     工厂函数接收配置和共享状态，因此工具既可以是无状态工具，也可以是有状态工具。
     """
     return [
-        lambda _settings, _todo_store: CalculatorTool(),
+        lambda settings, _todo_store: CalculatorTool(settings.calculator_settings),
         lambda settings, _todo_store: FileSearchTool(settings.file_search_root),
         lambda _settings, _todo_store: WebSummaryMockTool(),
         lambda _settings, todo_store: TodoTool(todo_store),

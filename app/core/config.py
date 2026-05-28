@@ -4,6 +4,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from app.core.tool_settings import CalculatorSettings
+
 
 def _bool_from_env(value: str | None, default: bool) -> bool:
     if value is None:
@@ -51,6 +53,8 @@ class Settings:
     llm_temperature: float = 0.3
     llm_max_tokens: int = 800
 
+    calculator_settings: CalculatorSettings = CalculatorSettings()
+
     @classmethod
     def from_env(cls) -> "Settings":
         """从环境变量构建配置。"""
@@ -68,4 +72,7 @@ class Settings:
             llm_base_url=os.getenv("LLM_BASE_URL") or None,
             llm_temperature=_float_from_env("LLM_TEMPERATURE", 0.3),
             llm_max_tokens=_int_from_env("LLM_MAX_TOKENS", 800),
+            calculator_settings=CalculatorSettings(
+                max_power_exponent=_int_from_env("CALCULATOR_MAX_POWER_EXPONENT", 8)
+            ),
         )
