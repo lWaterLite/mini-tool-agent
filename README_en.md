@@ -188,9 +188,15 @@ LOG_LEVEL=INFO
 FILE_SEARCH_ROOT=documents
 MAX_FILE_SEARCH_RESULTS=5
 MAX_AGENT_STEPS=4
+AGENT_PLANNER_MODE=mock
 CALCULATOR_MAX_POWER_EXPONENT=8
+LLM_API_KEY=your_api_key_here
 LLM_MODEL=gpt-4o-mini
 ```
+
+`AGENT_PLANNER_MODE=mock` uses the rule-based mock planner and does not call a real model.
+
+`AGENT_PLANNER_MODE=llm` uses an OpenAI-compatible API to generate tool plans. It requires `LLM_API_KEY` or `OPENAI_API_KEY`.
 
 The configuration entry point is:
 
@@ -301,4 +307,3 @@ Important fields include:
 ## License
 
 [MIT](LICENSE) @ 2026 lWaterLite
-

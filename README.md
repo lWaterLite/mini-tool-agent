@@ -195,9 +195,15 @@ LOG_LEVEL=INFO
 FILE_SEARCH_ROOT=documents
 MAX_FILE_SEARCH_RESULTS=5
 MAX_AGENT_STEPS=4
+AGENT_PLANNER_MODE=mock
 CALCULATOR_MAX_POWER_EXPONENT=8
+LLM_API_KEY=your_api_key_here
 LLM_MODEL=gpt-4o-mini
 ```
+
+`AGENT_PLANNER_MODE=mock` 会使用规则型 mock planner，不调用真实模型。
+
+`AGENT_PLANNER_MODE=llm` 会使用 OpenAI 兼容接口生成工具计划，需要配置 `LLM_API_KEY` 或 `OPENAI_API_KEY`。
 
 配置入口在：
 
@@ -289,4 +295,3 @@ request_finished
 ## License
 
 [MIT](LICENSE) @ 2026 lWaterLite
-
