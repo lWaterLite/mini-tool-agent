@@ -48,6 +48,8 @@ class Settings:
     log_level: str = "INFO"
     max_file_search_results: int = 5
     max_agent_steps: int = 4
+    agent_planner_mode: str = "mock"
+    llm_api_key: str | None = None
     llm_model: str = "gpt-4o-mini"
     llm_base_url: str | None = None
     llm_temperature: float = 0.3
@@ -68,6 +70,8 @@ class Settings:
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             max_file_search_results=_int_from_env("MAX_FILE_SEARCH_RESULTS", 5),
             max_agent_steps=_int_from_env("MAX_AGENT_STEPS", 4),
+            agent_planner_mode=os.getenv("AGENT_PLANNER_MODE", "mock"),
+            llm_api_key=os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or None,
             llm_model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
             llm_base_url=os.getenv("LLM_BASE_URL") or None,
             llm_temperature=_float_from_env("LLM_TEMPERATURE", 0.3),
