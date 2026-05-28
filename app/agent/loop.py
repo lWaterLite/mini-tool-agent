@@ -1,4 +1,6 @@
 import re
+import logging
+from time import perf_counter
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -8,7 +10,11 @@ from fastapi import status
 from app.agent.models import AgentEvent, AgentResult, ToolCallRecord
 from app.core.config import Settings
 from app.core.errors import AppError, ErrorCode
+from app.core.logging import get_logger, log_event, summarize_text
 from app.tools.registry import ToolRegistry
+
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -97,6 +103,16 @@ class AgentService:
             raise AppError(ErrorCode.INVALID_REQUEST, "用户消息不能为空", trace_id=trace_id)
 
         resolved_max_steps = self._resolve_max_steps(max_steps)
+        log_event(
+            logger,
+            logging.INFO,
+            "request_started",
+            trace_id=trace_id,
+            session_id=session_id,
+            message_preview=summarize_text(cleaned_message),
+            message_length=len(cleaned_message),
+            max_steps=resolved_max_steps,
+        )
         yield AgentEvent(
             event="start",
             trace_id=trace_id,
@@ -104,7 +120,23 @@ class AgentService:
         )
 
         plan = self._plan(cleaned_message, session_id=session_id)
+        log_event(
+            logger,
+            logging.INFO,
+            "agent_plan_created",
+            trace_id=trace_id,
+            planned_tools=[call.name for call in plan.tool_calls],
+            clarification=plan.clarification is not None,
+        )
         if plan.clarification is not None:
+            log_event(
+                logger,
+                logging.INFO,
+                "request_finished",
+                trace_id=trace_id,
+                final_status="clarification",
+                used_tools=[],
+            )
             yield AgentEvent(
                 event="final",
                 trace_id=trace_id,
@@ -114,6 +146,14 @@ class AgentService:
 
         if not plan.tool_calls:
             answer = "我已经收到你的消息。当前练习版 Agent 可以处理计算、文件搜索、网页摘要和待办事项。"
+            log_event(
+                logger,
+                logging.INFO,
+                "request_finished",
+                trace_id=trace_id,
+                final_status="direct_answer",
+                used_tools=[],
+            )
             yield AgentEvent(
                 event="final",
                 trace_id=trace_id,
@@ -122,6 +162,15 @@ class AgentService:
             return
 
         if len(plan.tool_calls) > resolved_max_steps:
+            log_event(
+                logger,
+                logging.WARNING,
+                "request_rejected",
+                trace_id=trace_id,
+                reason="max_steps_exceeded",
+                planned_steps=len(plan.tool_calls),
+                max_steps=resolved_max_steps,
+            )
             raise AppError(
                 ErrorCode.INVALID_REQUEST,
                 f"本次请求计划执行 {len(plan.tool_calls)} 个工具步骤，超过 max_steps={resolved_max_steps}",
@@ -130,6 +179,15 @@ class AgentService:
 
         records: list[ToolCallRecord] = []
         for index, planned_call in enumerate(plan.tool_calls, start=1):
+            log_event(
+                logger,
+                logging.INFO,
+                "tool_call_started",
+                trace_id=trace_id,
+                step=index,
+                tool_name=planned_call.name,
+                tool_arguments=planned_call.arguments,
+            )
             yield AgentEvent(
                 event="tool_call",
                 trace_id=trace_id,
@@ -137,7 +195,46 @@ class AgentService:
             )
 
             tool = self._tools.get(planned_call.name)
-            result = await tool.arun(planned_call.arguments, trace_id=trace_id)
+            started_at = perf_counter()
+            try:
+                result = await tool.arun(planned_call.arguments, trace_id=trace_id)
+            except AppError as exc:
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "tool_call_failed",
+                    trace_id=trace_id,
+                    step=index,
+                    tool_name=planned_call.name,
+                    latency_ms=round((perf_counter() - started_at) * 1000, 2),
+                    error_code=exc.code,
+                    error_message=exc.message,
+                )
+                raise
+            except Exception:
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "tool_call_failed",
+                    trace_id=trace_id,
+                    step=index,
+                    tool_name=planned_call.name,
+                    latency_ms=round((perf_counter() - started_at) * 1000, 2),
+                    error_code=ErrorCode.INTERNAL_ERROR,
+                    error_message="未处理工具异常",
+                )
+                raise
+
+            log_event(
+                logger,
+                logging.INFO,
+                "tool_call_finished",
+                trace_id=trace_id,
+                step=index,
+                tool_name=planned_call.name,
+                latency_ms=round((perf_counter() - started_at) * 1000, 2),
+                status="success",
+            )
             record = ToolCallRecord(
                 name=planned_call.name,
                 arguments=planned_call.arguments,
@@ -151,6 +248,14 @@ class AgentService:
                 data=record.model_dump(),
             )
 
+        log_event(
+            logger,
+            logging.INFO,
+            "request_finished",
+            trace_id=trace_id,
+            final_status="success",
+            used_tools=[record.name for record in records],
+        )
         yield AgentEvent(
             event="final",
             trace_id=trace_id,
